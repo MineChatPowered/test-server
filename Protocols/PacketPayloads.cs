@@ -20,7 +20,7 @@ public record LinkPayload(string LinkingCode, string ClientUuid) : PacketPayload
         writer.WriteEndMap();
     }
 
-    public static new PacketPayload Read(CborReader reader)
+    public static PacketPayload Read(CborReader reader)
     {
         var linkingCode = "";
         var clientUuid = "";
@@ -56,7 +56,7 @@ public record LinkOkPayload(string MinecraftUuid) : PacketPayload
         writer.WriteEndMap();
     }
 
-    public static new PacketPayload Read(CborReader reader)
+    public static PacketPayload Read(CborReader reader)
     {
         var minecraftUuid = "";
         var count = reader.ReadStartMap();
@@ -87,7 +87,7 @@ public record CapabilitiesPayload(bool SupportsComponents) : PacketPayload
         writer.WriteEndMap();
     }
 
-    public static new PacketPayload Read(CborReader reader)
+    public static PacketPayload Read(CborReader reader)
     {
         var supportsComponents = false;
         var count = reader.ReadStartMap();
@@ -116,7 +116,7 @@ public record AuthOkPayload : PacketPayload
         writer.WriteEndMap();
     }
 
-    public static new PacketPayload Read(CborReader reader)
+    public static PacketPayload Read(CborReader reader)
     {
         var count = reader.ReadStartMap();
         for (int i = 0; i < count; i++)
@@ -141,7 +141,7 @@ public record ChatMessagePayload(string Format, string Content) : PacketPayload
         writer.WriteEndMap();
     }
 
-    public static new PacketPayload Read(CborReader reader)
+    public static PacketPayload Read(CborReader reader)
     {
         var format = "";
         var content = "";
@@ -177,7 +177,7 @@ public record PingPayload(long TimestampMs) : PacketPayload
         writer.WriteEndMap();
     }
 
-    public static new PacketPayload Read(CborReader reader)
+    public static PacketPayload Read(CborReader reader)
     {
         var timestampMs = 0L;
         var count = reader.ReadStartMap();
@@ -208,7 +208,7 @@ public record PongPayload(long TimestampMs) : PacketPayload
         writer.WriteEndMap();
     }
 
-    public static new PacketPayload Read(CborReader reader)
+    public static PacketPayload Read(CborReader reader)
     {
         var timestampMs = 0L;
         var count = reader.ReadStartMap();
@@ -255,7 +255,7 @@ public record ModerationPayload(int Action, int Scope, string? Reason = null, in
         writer.WriteEndMap();
     }
 
-    public static new PacketPayload Read(CborReader reader)
+    public static PacketPayload Read(CborReader reader)
     {
         var action = 0;
         var scope = 0;
@@ -302,7 +302,7 @@ public record SystemDisconnectPayload(int ReasonCode, string Message) : PacketPa
         writer.WriteEndMap();
     }
 
-    public static new PacketPayload Read(CborReader reader)
+    public static PacketPayload Read(CborReader reader)
     {
         var reasonCode = 0;
         var message = "";

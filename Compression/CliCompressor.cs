@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Serilog;
 
 namespace Minechat.Server.Compression;
 
@@ -6,13 +7,17 @@ public class CliCompressor : ICompressionHandler
 {
     public byte[] Compress(byte[] data)
     {
+        Log.Debug("Compressing {Size} bytes", data.Length);
+
         var tempIn = Path.GetTempFileName();
         var tempOut = Path.GetTempFileName();
         try
         {
             File.WriteAllBytes(tempIn, data);
             RunZstdCli(tempIn, tempOut, "-z");
-            return File.ReadAllBytes(tempOut);
+            var result = File.ReadAllBytes(tempOut);
+            Log.Debug("Compressed to {Size} bytes", result.Length);
+            return result;
         }
         finally
         {
@@ -23,16 +28,28 @@ public class CliCompressor : ICompressionHandler
 
     public byte[] Decompress(byte[] compressedData, int decompressedSize)
     {
+        Log.Debug("Decompressing {Size} bytes to expected {Expected} bytes",
+            compressedData.Length, decompressedSize);
+
         var tempIn = Path.GetTempFileName();
         var tempOut = Path.GetTempFileName();
         try
         {
             File.WriteAllBytes(tempIn, compressedData);
             RunZstdCli(tempIn, tempOut, "-d");
-            return File.ReadAllBytes(tempOut);
+            var result = File.ReadAllBytes(tempOut);
+
+            if (result.Length != decompressedSize)
+            {
+                Log.Warning("Decompressed size mismatch. Expected {Expected}, got {Actual}",
+                    decompressedSize, result.Length);
+            }
+
+            return result;
         }
-        catch
+        catch (Exception ex)
         {
+            Log.Warning(ex, "Decompression failed, returning compressed data as-is");
             return compressedData;
         }
         finally
@@ -55,7 +72,11 @@ public class CliCompressor : ICompressionHandler
         };
 
         using var process = Process.Start(startInfo);
-        process.WaitForExit(5000);
+        if (!process.WaitForExit(5000))
+        {
+            process.Kill();
+            throw new Exception("zstd timed out after 5 seconds");
+        }
 
         if (process.ExitCode != 0)
         {

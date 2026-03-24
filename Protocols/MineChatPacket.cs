@@ -53,8 +53,8 @@ public record MineChatPacket(int PacketType, PacketPayload Payload)
                 }
                 catch
                 {
-                    try { reader.SkipValue(); } catch { }
-                    try { packetType = (int)reader.ReadUInt32(); } catch { }
+                    try { reader.SkipValue(); } catch { /* ignored */ }
+                    try { packetType = (int)reader.ReadUInt32(); } catch { /* ignored */ }
                 }
             }
             reader.ReadEndMap();

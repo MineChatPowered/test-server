@@ -1,3 +1,5 @@
+using Serilog;
+
 namespace Minechat.Server.Framing;
 
 public class FrameHandler
@@ -19,13 +21,13 @@ public class FrameHandler
             headerRead += bytesRead;
         }
 
-        Console.WriteLine($"DEBUG: Header read: {Convert.ToHexString(headerBuffer)}");
+        Log.Debug("Header read: {HeaderBufferHex}", Convert.ToHexString(headerBuffer));
 
         // Both big-endian as per spec
         var decompressedSize = ReadInt32BigEndian(headerBuffer.AsSpan(0, 4));
         var compressedSize = ReadInt32BigEndian(headerBuffer.AsSpan(4, 4));
 
-        Console.WriteLine($"DEBUG: decompressedSize={decompressedSize}, compressedSize={compressedSize}");
+        Log.Debug("decompressedSize={DecompressedSize}, compressedSize={CompressedSize}", decompressedSize, compressedSize);
 
         if (decompressedSize <= 0 || compressedSize <= 0)
             throw new InvalidDataException("Invalid frame size: decompressed or compressed size is non-positive");
@@ -45,7 +47,7 @@ public class FrameHandler
             dataRead += bytesRead;
         }
 
-        Console.WriteLine($"DEBUG: Read compressed data: {compressedData.Length} bytes");
+        Log.Debug("Read compressed data: {CompressedDataLength} bytes", compressedData.Length);
 
         return (decompressedSize, compressedSize, compressedData);
     }
@@ -78,7 +80,7 @@ public class FrameHandler
         WriteInt32BigEndian(header, decompressedSize);
         WriteInt32BigEndian(header.AsSpan(4, 4), compressedData.Length);
 
-        Console.WriteLine($"DEBUG: Writing header: {Convert.ToHexString(header)}, decompressedSize={decompressedSize}, compressedSize={compressedData.Length}");
+        Log.Debug("Writing header: {HeaderHex}, decompressedSize={DecompressedSize}, compressedSize={CompressedDataLength}", Convert.ToHexString(header), decompressedSize, compressedData.Length);
 
         await stream.WriteAsync(header, cancellationToken);
         await stream.WriteAsync(compressedData, cancellationToken);

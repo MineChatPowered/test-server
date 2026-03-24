@@ -3,8 +3,8 @@ using System.Net.Sockets;
 using System.Security.Cryptography.X509Certificates;
 using Minechat.Server.Compression;
 using Minechat.Server.Framing;
-using Minechat.Server.Logging;
 using Minechat.Server.Protocols;
+using Serilog;
 
 namespace Minechat.Server.Connection;
 
@@ -12,34 +12,47 @@ public class ClientConnection
 {
     private readonly TcpClient _client;
     private readonly SslStream _sslStream;
-    private readonly ChatLogger _logger;
+    private readonly string _connectionId;
+    private readonly CancellationToken _cancellationToken;
+    private readonly TimeSpan _keepAliveTimeout;
     private readonly FrameHandler _frameHandler;
     private readonly ICompressionHandler _compressionHandler;
+    private readonly Timer _pingTimer;
+
     private bool _running = true;
     private string? _clientUuid;
     private string? _minecraftUuid;
     private bool _authenticated;
+    private long _lastPacketTime;
 
-    public ClientConnection(TcpClient client, X509Certificate2 serverCert, ChatLogger logger)
+    public ClientConnection(TcpClient client, X509Certificate2 serverCert, string connectionId,
+        CancellationToken cancellationToken, TimeSpan keepAliveTimeout)
     {
         _client = client;
+        _connectionId = connectionId;
+        _cancellationToken = cancellationToken;
+        _keepAliveTimeout = keepAliveTimeout;
+        _lastPacketTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
         _sslStream = new SslStream(
             _client.GetStream(),
             false,
             (sender, certificate, chain, errors) => true
         );
-        _logger = logger;
+
         _frameHandler = new FrameHandler();
         _compressionHandler = new CliCompressor();
+
+        _pingTimer = new Timer(SendPing, null, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10));
 
         try
         {
             _sslStream.AuthenticateAsServer(serverCert);
-            _logger.LogConnection("unknown", "TLS_HANDSHAKE_SUCCESS");
+            Log.Debug("[{ConnectionId}] TLS handshake successful", _connectionId);
         }
         catch (Exception ex)
         {
-            _logger.LogError("TLS handshake failed", ex);
+            Log.Error(ex, "[{ConnectionId}] TLS handshake failed", _connectionId);
             throw;
         }
     }
@@ -48,11 +61,21 @@ public class ClientConnection
     {
         try
         {
-            while (_running)
+            while (_running && !_cancellationToken.IsCancellationRequested)
             {
-                var frame = await _frameHandler.ReadFrameAsync(_sslStream);
+                var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                if (now - _lastPacketTime > _keepAliveTimeout.TotalMilliseconds)
+                {
+                    Log.Warning("[{ConnectionId}] Connection timed out after {Timeout}ms of inactivity",
+                        _connectionId, _keepAliveTimeout.TotalMilliseconds);
+                    break;
+                }
+
+                var frame = await _frameHandler.ReadFrameAsync(_sslStream, _cancellationToken);
                 if (frame == null)
                     break;
+
+                _lastPacketTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
                 var (decompressedSize, _, compressedData) = frame.Value;
 
@@ -61,23 +84,46 @@ public class ClientConnection
 
                 if (packet == null)
                 {
-                    Console.WriteLine($"DEBUG: Failed to deserialize. Data hex: {Convert.ToHexString(decompressed.Take(64).ToArray())}");
-                    _logger.LogError("Failed to deserialize packet");
+                    Log.Error("[{ConnectionId}] Failed to deserialize packet. Data hex: {Hex}",
+                        _connectionId, Convert.ToHexString(decompressed.Take(64).ToArray()));
                     break;
                 }
 
-                Console.WriteLine($"DEBUG: Successfully deserialized packet type {packet.PacketType}");
+                Log.Debug("[{ConnectionId}] Successfully deserialized packet type {PacketType}",
+                    _connectionId, packet.PacketType);
 
                 await HandlePacketAsync(packet);
             }
         }
+        catch (OperationCanceledException)
+        {
+            Log.Debug("[{ConnectionId}] Connection cancelled", _connectionId);
+        }
         catch (Exception ex)
         {
-            _logger.LogError("Connection error", ex);
+            Log.Error(ex, "[{ConnectionId}] Connection error", _connectionId);
         }
         finally
         {
             Close();
+        }
+    }
+
+    private void SendPing(object? state)
+    {
+        if (!_running || _cancellationToken.IsCancellationRequested)
+            return;
+
+        try
+        {
+            var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var payload = new PingPayload(timestamp);
+            _ = SendPacketAsync(PacketTypes.PING, payload);
+            Log.Debug("[{ConnectionId}] Sent PING with timestamp {Timestamp}", _connectionId, timestamp);
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "[{ConnectionId}] Failed to send PING", _connectionId);
         }
     }
 
@@ -110,31 +156,32 @@ public class ClientConnection
         _clientUuid = payload.ClientUuid;
         var linkingCode = payload.LinkingCode;
 
-        _logger.LogConnection(_clientUuid, $"LINK_RECEIVED code={linkingCode}");
+        Log.Information("[{ConnectionId}] LINK_RECEIVED code={LinkingCode}", _connectionId, linkingCode);
 
         var responsePayload = new LinkOkPayload("550e8400-e29b-41d4-a716-446655440000");
         await SendPacketAsync(PacketTypes.LINK_OK, responsePayload);
 
-        _logger.LogConnection(_clientUuid, "LINK_OK_SENT");
+        Log.Information("[{ConnectionId}] LINK_OK_SENT", _connectionId);
     }
 
     private async Task HandleCapabilitiesAsync(CapabilitiesPayload? payload)
     {
         if (payload == null) return;
 
-        _logger.LogConnection(_clientUuid ?? "unknown", $"CAPABILITIES_RECEIVED supports_components={payload.SupportsComponents}");
+        Log.Information("[{ConnectionId}] CAPABILITIES_RECEIVED supports_components={SupportsComponents}",
+            _connectionId, payload.SupportsComponents);
 
         await SendPacketAsync(PacketTypes.AUTH_OK, new AuthOkPayload());
         _authenticated = true;
 
-        _logger.LogConnection(_clientUuid ?? "unknown", "AUTH_OK_SENT");
+        Log.Information("[{ConnectionId}] AUTH_OK_SENT", _connectionId);
     }
 
     private void HandleChatMessage(ChatMessagePayload? payload)
     {
         if (payload == null || !_authenticated) return;
 
-        _logger.LogChat(_clientUuid ?? "unknown", payload.Content);
+        Log.Information("[{ConnectionId}] CHAT_MESSAGE: {Content}", _connectionId, payload.Content);
 
         _ = EchoBackAsync(payload);
     }
@@ -148,9 +195,11 @@ public class ClientConnection
     {
         if (payload == null) return;
 
-        _logger.LogConnection(_clientUuid ?? "unknown", $"PING timestamp={payload.TimestampMs}");
+        Log.Debug("[{ConnectionId}] Received PING with timestamp {Timestamp}", _connectionId, payload.TimestampMs);
 
         await SendPacketAsync(PacketTypes.PONG, new PongPayload(payload.TimestampMs));
+
+        Log.Information("[{ConnectionId}] Responded to PING with timestamp {Timestamp}", _connectionId, payload.TimestampMs);
     }
 
     private void HandlePong(PongPayload? payload)
@@ -158,7 +207,7 @@ public class ClientConnection
         if (payload == null) return;
 
         var rtt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - payload.TimestampMs;
-        _logger.LogConnection(_clientUuid ?? "unknown", $"PONG rtt={rtt}ms");
+        Log.Information("[{ConnectionId}] Received PONG rtt={Rtt}ms", _connectionId, rtt);
     }
 
     private async Task SendPacketAsync(int packetType, PacketPayload payload)
@@ -167,17 +216,29 @@ public class ClientConnection
         var serialized = packet.Serialize();
         var compressed = _compressionHandler.Compress(serialized);
 
-        await _frameHandler.WriteFrameAsync(_sslStream, compressed, serialized.Length);
+        await _frameHandler.WriteFrameAsync(_sslStream, compressed, serialized.Length, _cancellationToken);
     }
 
-    private void Close()
+    public void Close()
     {
         _running = false;
+        _pingTimer.Dispose();
+
         if (_clientUuid != null)
         {
-            _logger.LogConnection(_clientUuid, "DISCONNECTED");
+            Log.Information("[{ConnectionId}] DISCONNECTED client={ClientUuid}", _connectionId, _clientUuid);
         }
-        _sslStream.Close();
-        _client.Close();
+
+        try
+        {
+            _sslStream.Close();
+        }
+        catch { }
+
+        try
+        {
+            _client.Close();
+        }
+        catch { }
     }
 }

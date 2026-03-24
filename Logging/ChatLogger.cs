@@ -65,7 +65,10 @@ public class ChatLogger
             {
                 File.AppendAllText(_logFilePath, logLine + Environment.NewLine);
             }
-            catch (Exception _) { }
+            catch
+            {
+                // ignored
+            }
         }
     }
 }
