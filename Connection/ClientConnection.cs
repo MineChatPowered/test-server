@@ -14,7 +14,7 @@ public class ClientConnection
     private readonly SslStream _sslStream;
     private readonly ChatLogger _logger;
     private readonly FrameHandler _frameHandler;
-    private readonly CompressionHandler _compressionHandler;
+    private readonly ICompressionHandler _compressionHandler;
     private bool _running = true;
     private string? _clientUuid;
     private string? _minecraftUuid;
@@ -30,7 +30,7 @@ public class ClientConnection
         );
         _logger = logger;
         _frameHandler = new FrameHandler();
-        _compressionHandler = new CompressionHandler();
+        _compressionHandler = new CliCompressor();
 
         try
         {

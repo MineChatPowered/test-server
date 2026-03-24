@@ -2,7 +2,7 @@ using System.Diagnostics;
 
 namespace Minechat.Server.Compression;
 
-public class CompressionHandler
+public class CliCompressor : ICompressionHandler
 {
     public byte[] Compress(byte[] data)
     {
