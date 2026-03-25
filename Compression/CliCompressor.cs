@@ -49,8 +49,9 @@ public class CliCompressor : ICompressionHandler
         }
         catch (Exception ex)
         {
-            Log.Warning(ex, "Decompression failed, returning compressed data as-is");
-            return compressedData;
+            Log.Error(ex, "Decompression failed for {Size} bytes, expected decompressed size {Expected}",
+                compressedData.Length, decompressedSize);
+            throw;
         }
         finally
         {
@@ -72,6 +73,11 @@ public class CliCompressor : ICompressionHandler
         };
 
         using var process = Process.Start(startInfo);
+        if (process == null)
+        {
+            throw new Exception("Failed to start zstd process");
+        }
+
         if (!process.WaitForExit(5000))
         {
             process.Kill();

@@ -233,14 +233,18 @@ public class ClientConnection : IDisposable
 
     public void Close()
     {
-        _running = false;
-        _pingTimer.Dispose();
-
-        if (_clientUuid != null)
+        if (_running && _clientUuid != null)
         {
             Log.Information("[{ConnectionId}] DISCONNECTED client={ClientUuid}, minecraft_uuid={MinecraftUuid}",
                 _connectionId, _clientUuid, _minecraftUuid);
         }
+        _running = false;
+        Dispose();
+    }
+
+    public void Dispose()
+    {
+        _pingTimer.Dispose();
 
         try
         {
@@ -259,10 +263,5 @@ public class ClientConnection : IDisposable
         {
             Log.Debug(ex, "[{ConnectionId}] Error closing TCP client", _connectionId);
         }
-    }
-
-    public void Dispose()
-    {
-        _pingTimer.Dispose();
     }
 }
