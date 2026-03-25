@@ -9,7 +9,7 @@ using Serilog;
 
 namespace Minechat.Server.Connection;
 
-public class ClientConnection
+public class ClientConnection : IDisposable
 {
     private readonly TcpClient _client;
     private readonly SslStream _sslStream;
@@ -18,7 +18,7 @@ public class ClientConnection
     private readonly TimeSpan _keepAliveTimeout;
     private readonly FrameHandler _frameHandler;
     private readonly ICompressionHandler _compressionHandler;
-    private readonly ChatLogger _chatLogger;
+    private readonly IChatLogger _chatLogger;
     private readonly Timer _pingTimer;
 
     private bool _running = true;
@@ -29,7 +29,7 @@ public class ClientConnection
 
     public ClientConnection(TcpClient client, X509Certificate2 serverCert, string connectionId,
         CancellationToken cancellationToken, TimeSpan keepAliveTimeout, int pingIntervalSeconds,
-        int connectionTimeoutSeconds, ChatLogger chatLogger)
+        int connectionTimeoutSeconds, IChatLogger chatLogger)
     {
         _client = client;
         _connectionId = connectionId;
@@ -246,12 +246,23 @@ public class ClientConnection
         {
             _sslStream.Close();
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "[{ConnectionId}] Error closing SSL stream", _connectionId);
+        }
 
         try
         {
             _client.Close();
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "[{ConnectionId}] Error closing TCP client", _connectionId);
+        }
+    }
+
+    public void Dispose()
+    {
+        _pingTimer.Dispose();
     }
 }

@@ -2,7 +2,7 @@ using Serilog;
 
 namespace Minechat.Server.Logging;
 
-public class ChatLogger
+public class ChatLogger : IChatLogger
 {
     private readonly string _chatLogPath;
     private readonly ILogger _logger;

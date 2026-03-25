@@ -1,4 +1,5 @@
 using System.Formats.Cbor;
+using Serilog;
 
 namespace Minechat.Server.Protocols;
 
@@ -66,7 +67,7 @@ public record MineChatPacket(int PacketType, PacketPayload Payload)
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Failed to deserialize packet: {ex.Message}");
+            Log.Warning(ex, "Failed to deserialize packet");
             return null;
         }
     }
