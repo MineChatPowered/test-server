@@ -3,6 +3,7 @@ using System.Net.Sockets;
 using System.Security.Cryptography.X509Certificates;
 using Minechat.Server.Compression;
 using Minechat.Server.Framing;
+using Minechat.Server.Logging;
 using Minechat.Server.Protocols;
 using Serilog;
 
@@ -17,6 +18,7 @@ public class ClientConnection
     private readonly TimeSpan _keepAliveTimeout;
     private readonly FrameHandler _frameHandler;
     private readonly ICompressionHandler _compressionHandler;
+    private readonly ChatLogger _chatLogger;
     private readonly Timer _pingTimer;
 
     private bool _running = true;
@@ -26,13 +28,15 @@ public class ClientConnection
     private long _lastPacketTime;
 
     public ClientConnection(TcpClient client, X509Certificate2 serverCert, string connectionId,
-        CancellationToken cancellationToken, TimeSpan keepAliveTimeout)
+        CancellationToken cancellationToken, TimeSpan keepAliveTimeout, int pingIntervalSeconds,
+        int connectionTimeoutSeconds, ChatLogger chatLogger)
     {
         _client = client;
         _connectionId = connectionId;
         _cancellationToken = cancellationToken;
         _keepAliveTimeout = keepAliveTimeout;
         _lastPacketTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        _chatLogger = chatLogger;
 
         _sslStream = new SslStream(
             _client.GetStream(),
@@ -40,10 +44,12 @@ public class ClientConnection
             (sender, certificate, chain, errors) => true
         );
 
+        _sslStream.ReadTimeout = connectionTimeoutSeconds * 1000;
+
         _frameHandler = new FrameHandler();
         _compressionHandler = new CliCompressor();
 
-        _pingTimer = new Timer(SendPing, null, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10));
+        _pingTimer = new Timer(SendPing, null, TimeSpan.FromSeconds(pingIntervalSeconds), TimeSpan.FromSeconds(pingIntervalSeconds));
 
         try
         {
@@ -156,9 +162,12 @@ public class ClientConnection
         _clientUuid = payload.ClientUuid;
         var linkingCode = payload.LinkingCode;
 
-        Log.Information("[{ConnectionId}] LINK_RECEIVED code={LinkingCode}", _connectionId, linkingCode);
+        _minecraftUuid = Guid.NewGuid().ToString();
 
-        var responsePayload = new LinkOkPayload("550e8400-e29b-41d4-a716-446655440000");
+        Log.Information("[{ConnectionId}] LINK_RECEIVED code={LinkingCode}, assigned_minecraft_uuid={MinecraftUuid}",
+            _connectionId, linkingCode, _minecraftUuid);
+
+        var responsePayload = new LinkOkPayload(_minecraftUuid);
         await SendPacketAsync(PacketTypes.LINK_OK, responsePayload);
 
         Log.Information("[{ConnectionId}] LINK_OK_SENT", _connectionId);
@@ -181,7 +190,10 @@ public class ClientConnection
     {
         if (payload == null || !_authenticated) return;
 
-        Log.Information("[{ConnectionId}] CHAT_MESSAGE: {Content}", _connectionId, payload.Content);
+        var sender = _minecraftUuid ?? _clientUuid ?? "unknown";
+        _chatLogger.LogChat(sender, payload.Content);
+
+        Log.Information("[{ConnectionId}] CHAT_MESSAGE from={Sender}: {Content}", _connectionId, sender, payload.Content);
 
         _ = EchoBackAsync(payload);
     }
@@ -226,7 +238,8 @@ public class ClientConnection
 
         if (_clientUuid != null)
         {
-            Log.Information("[{ConnectionId}] DISCONNECTED client={ClientUuid}", _connectionId, _clientUuid);
+            Log.Information("[{ConnectionId}] DISCONNECTED client={ClientUuid}, minecraft_uuid={MinecraftUuid}",
+                _connectionId, _clientUuid, _minecraftUuid);
         }
 
         try

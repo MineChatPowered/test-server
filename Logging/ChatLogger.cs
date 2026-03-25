@@ -1,74 +1,37 @@
+using Serilog;
+
 namespace Minechat.Server.Logging;
 
 public class ChatLogger
 {
-    private readonly string _logFilePath;
-    private readonly object _lock = new();
+    private readonly string _chatLogPath;
+    private readonly ILogger _logger;
 
-    public ChatLogger(string logFilePath = "chat.log")
+    public ChatLogger(string chatLogPath = "chat.log")
     {
-        _logFilePath = logFilePath;
+        _chatLogPath = chatLogPath;
+        _logger = Log.ForContext<ChatLogger>();
     }
 
-    public void LogChat(string clientUuid, string message)
+    public void LogChat(string sender, string content)
     {
         var timestamp = DateTimeOffset.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
-        var logLine = $"{timestamp} [{clientUuid}] {message}";
+        var logLine = $"{timestamp} [{sender}] {content}";
 
-        Console.WriteLine(logLine);
+        _logger.Information("[CHAT] {Sender}: {Content}", sender, content);
 
-        lock (_lock)
+        try
         {
-            try
+            var directory = Path.GetDirectoryName(_chatLogPath);
+            if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
             {
-                File.AppendAllText(_logFilePath, logLine + Environment.NewLine);
+                Directory.CreateDirectory(directory);
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Failed to write to log file: {ex.Message}");
-            }
+            File.AppendAllText(_chatLogPath, logLine + Environment.NewLine);
         }
-    }
-
-    public void LogConnection(string clientUuid, string eventType)
-    {
-        var timestamp = DateTimeOffset.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
-        var logLine = $"{timestamp} [{eventType}] {clientUuid}";
-
-        Console.WriteLine(logLine);
-
-        lock (_lock)
+        catch (Exception ex)
         {
-            try
-            {
-                File.AppendAllText(_logFilePath, logLine + Environment.NewLine);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Failed to write to log file: {ex.Message}");
-            }
-        }
-    }
-
-    public void LogError(string message, Exception? ex = null)
-    {
-        var timestamp = DateTimeOffset.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
-        var logLine = ex != null
-            ? $"{timestamp} [ERROR] {message}: {ex.Message}"
-            : $"{timestamp} [ERROR] {message}";
-
-        Console.WriteLine(logLine);
-
-        lock (_lock)
-        {
-            try
-            {
-                File.AppendAllText(_logFilePath, logLine + Environment.NewLine);
-            }
-            catch
-            {
-                // ignored
-            }
+            _logger.Warning(ex, "Failed to write chat message to file");
         }
     }
 }

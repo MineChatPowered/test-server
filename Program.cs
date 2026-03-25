@@ -5,6 +5,7 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using Minechat.Server.Connection;
+using Minechat.Server.Logging;
 using Serilog;
 using Serilog.Events;
 
@@ -34,6 +35,7 @@ class Program
 
         Log.Information("MineChat Echo Test Server v1.0.0");
 
+        var chatLogger = new ChatLogger();
         _cts = new CancellationTokenSource();
         Console.CancelKeyPress += (s, e) =>
         {
@@ -80,7 +82,10 @@ class Program
 
                     var connectionId = Guid.NewGuid().ToString("N")[..8];
                     var connection = new ClientConnection(client, serverCert, connectionId, _cts.Token,
-                        TimeSpan.FromSeconds(ServerConfig.KEEP_ALIVE_TIMEOUT_SECONDS));
+                        TimeSpan.FromSeconds(ServerConfig.KEEP_ALIVE_TIMEOUT_SECONDS),
+                        ServerConfig.PING_INTERVAL_SECONDS,
+                        ServerConfig.CONNECTION_TIMEOUT_SECONDS,
+                        chatLogger);
 
                     _connections.Add(connection);
                     _ = connection.RunAsync().ContinueWith(t =>
