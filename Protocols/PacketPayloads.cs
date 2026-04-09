@@ -77,26 +77,49 @@ public record LinkOkPayload(string MinecraftUuid) : PacketPayload
     }
 }
 
-public record CapabilitiesPayload(bool SupportsComponents) : PacketPayload
+public record CapabilitiesPayload(string[] SupportedFormats, string? PreferredFormat = null) : PacketPayload
 {
     public override void WritePayload(CborWriter writer)
     {
-        writer.WriteStartMap(1);
+        var size = 1;
+        if (PreferredFormat != null) size++;
+        writer.WriteStartMap(size);
         writer.WriteInt32(0);
-        writer.WriteBoolean(SupportsComponents);
+        writer.WriteStartArray(SupportedFormats.Length);
+        foreach (var format in SupportedFormats)
+        {
+            writer.WriteTextString(format);
+        }
+        writer.WriteEndArray();
+        if (PreferredFormat != null)
+        {
+            writer.WriteInt32(1);
+            writer.WriteTextString(PreferredFormat);
+        }
         writer.WriteEndMap();
     }
 
     public static PacketPayload Read(CborReader reader)
     {
-        var supportsComponents = false;
+        var supportedFormats = new List<string>();
+        string? preferredFormat = null;
+
         var count = reader.ReadStartMap();
         for (int i = 0; i < count; i++)
         {
             var key = reader.ReadInt32();
             if (key == 0)
             {
-                supportsComponents = reader.ReadBoolean();
+                var arrayLength = reader.ReadStartArray();
+                for (int j = 0; j < arrayLength; j++)
+                {
+                    supportedFormats.Add(reader.ReadTextString() ?? "");
+                }
+                reader.ReadEndArray();
+            }
+            else if (key == 1)
+            {
+                preferredFormat = reader.ReadTextString();
             }
             else
             {
@@ -104,7 +127,7 @@ public record CapabilitiesPayload(bool SupportsComponents) : PacketPayload
             }
         }
         reader.ReadEndMap();
-        return new CapabilitiesPayload(supportsComponents);
+        return new CapabilitiesPayload(supportedFormats.ToArray(), preferredFormat);
     }
 }
 

@@ -1,11 +1,11 @@
 using System.Collections.Concurrent;
 using System.Net;
-using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using Minechat.Server.Connection;
 using Minechat.Server.Logging;
+using Minechat.Server.Protocols;
 using Serilog;
 using Serilog.Events;
 
@@ -16,8 +16,50 @@ class Program
     private const string CertFile = "server.pfx";
     private const string CertPassword = "minechat";
 
-    private static readonly ConcurrentBag<ClientConnection> _connections = new();
+    private static readonly ConcurrentBag<ClientConnection> _connections = [];
     private static CancellationTokenSource? _cts;
+
+    private static void BroadcastChatMessage(ChatMessagePayload payload, string? excludeConnectionId)
+    {
+        foreach (var conn in _connections)
+        {
+            if (conn.IsAuthenticated && (excludeConnectionId == null || conn.ConnectionId != excludeConnectionId))
+            {
+                try
+                {
+                    var formatToUse = SelectFormatForClient(payload.Format, conn.SupportedFormats, conn.PreferredFormat);
+                    var transformedPayload = new ChatMessagePayload(formatToUse, payload.Content);
+                    conn.SendPacket(PacketTypes.CHAT_MESSAGE, transformedPayload);
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning(ex, "Failed to send to connection {ConnectionId}", conn.ConnectionId);
+                }
+            }
+        }
+    }
+
+    private static string SelectFormatForClient(string originalFormat, string[]? supportedFormats, string? preferredFormat)
+    {
+        if (supportedFormats == null || supportedFormats.Length == 0)
+            return "components";
+
+        var formats = supportedFormats.ToHashSet();
+
+        if (preferredFormat != null && formats.Contains(preferredFormat))
+            return preferredFormat;
+
+        if (formats.Contains(originalFormat))
+            return originalFormat;
+
+        if (formats.Contains("commonmark"))
+            return "commonmark";
+
+        if (formats.Contains("components"))
+            return "components";
+
+        return "components";
+    }
 
     static async Task Main(string[] args)
     {
@@ -37,14 +79,14 @@ class Program
 
         var chatLogger = new ChatLogger();
         _cts = new CancellationTokenSource();
-        Console.CancelKeyPress += (s, e) =>
+        Console.CancelKeyPress += (_, e) =>
         {
             e.Cancel = true;
             Log.Information("Shutdown signal received, closing connections...");
             _cts.Cancel();
         };
 
-        AppDomain.CurrentDomain.ProcessExit += (s, e) =>
+        AppDomain.CurrentDomain.ProcessExit += (_, _) =>
         {
             Log.Information("Process exiting, closing all connections...");
             foreach (var conn in _connections)
@@ -85,7 +127,8 @@ class Program
                         TimeSpan.FromSeconds(ServerConfig.KEEP_ALIVE_TIMEOUT_SECONDS),
                         ServerConfig.PING_INTERVAL_SECONDS,
                         ServerConfig.CONNECTION_TIMEOUT_SECONDS,
-                        chatLogger);
+                        chatLogger,
+                        BroadcastChatMessage);
 
                     _connections.Add(connection);
                     _ = connection.RunAsync().ContinueWith(t =>
@@ -110,10 +153,13 @@ class Program
         finally
         {
             Log.Information("Server shutting down...");
+
             foreach (var conn in _connections)
             {
+                conn.SendSystemDisconnect(SystemDisconnectReason.SHUTDOWN, "Server shutting down");
                 conn.Close();
             }
+
             listener.Stop();
             Log.CloseAndFlush();
         }
@@ -150,9 +196,10 @@ class Program
         sanBuilder.AddIpAddress(IPAddress.Loopback);
         request.CertificateExtensions.Add(sanBuilder.Build());
 
+        var utcNow = DateTimeOffset.UtcNow;
         var certificate = request.CreateSelfSigned(
-            DateTimeOffset.UtcNow.AddMinutes(-5),
-            DateTimeOffset.UtcNow.AddYears(1)
+            utcNow.AddMinutes(-5),
+            utcNow.AddYears(1)
         );
 
         var pfxBytes = certificate.Export(X509ContentType.Pfx, CertPassword);

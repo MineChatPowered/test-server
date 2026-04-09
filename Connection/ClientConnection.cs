@@ -21,15 +21,25 @@ public class ClientConnection : IDisposable
     private readonly IChatLogger _chatLogger;
     private readonly Timer _pingTimer;
 
+    public string ConnectionId => _connectionId;
+    public bool IsAuthenticated => _authenticated;
+
     private bool _running = true;
     private string? _clientUuid;
     private string? _minecraftUuid;
     private bool _authenticated;
     private long _lastPacketTime;
+    private string[]? _clientSupportedFormats;
+    private string? _clientPreferredFormat;
+    private bool _muted;
+    private readonly Action<ChatMessagePayload, string?>? _broadcastCallback;
+
+    public string[]? SupportedFormats => _clientSupportedFormats;
+    public string? PreferredFormat => _clientPreferredFormat;
 
     public ClientConnection(TcpClient client, X509Certificate2 serverCert, string connectionId,
         CancellationToken cancellationToken, TimeSpan keepAliveTimeout, int pingIntervalSeconds,
-        int connectionTimeoutSeconds, IChatLogger chatLogger)
+        int connectionTimeoutSeconds, IChatLogger chatLogger, Action<ChatMessagePayload, string?>? broadcastCallback = null)
     {
         _client = client;
         _connectionId = connectionId;
@@ -37,11 +47,12 @@ public class ClientConnection : IDisposable
         _keepAliveTimeout = keepAliveTimeout;
         _lastPacketTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         _chatLogger = chatLogger;
+        _broadcastCallback = broadcastCallback;
 
         _sslStream = new SslStream(
             _client.GetStream(),
             false,
-            (sender, certificate, chain, errors) => true
+            (_, _, _, _) => true
         );
 
         _sslStream.ReadTimeout = connectionTimeoutSeconds * 1000;
@@ -152,6 +163,9 @@ public class ClientConnection : IDisposable
             case PacketTypes.PONG:
                 HandlePong(packet.Payload as PongPayload);
                 break;
+            case PacketTypes.MODERATION:
+                HandleModeration(packet.Payload as ModerationPayload);
+                break;
         }
     }
 
@@ -177,8 +191,11 @@ public class ClientConnection : IDisposable
     {
         if (payload == null) return;
 
-        Log.Information("[{ConnectionId}] CAPABILITIES_RECEIVED supports_components={SupportsComponents}",
-            _connectionId, payload.SupportsComponents);
+        _clientSupportedFormats = payload.SupportedFormats;
+        _clientPreferredFormat = payload.PreferredFormat;
+
+        Log.Information("[{ConnectionId}] CAPABILITIES_RECEIVED supported_formats=[{SupportedFormats}], preferred_format={PreferredFormat}",
+            _connectionId, string.Join(",", payload.SupportedFormats), payload.PreferredFormat);
 
         await SendPacketAsync(PacketTypes.AUTH_OK, new AuthOkPayload());
         _authenticated = true;
@@ -190,17 +207,21 @@ public class ClientConnection : IDisposable
     {
         if (payload == null || !_authenticated) return;
 
+        if (_muted)
+        {
+            Log.Warning("[{ConnectionId}] Message rejected: client is muted", _connectionId);
+            return;
+        }
+
         var sender = _minecraftUuid ?? _clientUuid ?? "unknown";
         _chatLogger.LogChat(sender, payload.Content);
 
         Log.Information("[{ConnectionId}] CHAT_MESSAGE from={Sender}: {Content}", _connectionId, sender, payload.Content);
 
-        _ = EchoBackAsync(payload);
-    }
-
-    private async Task EchoBackAsync(ChatMessagePayload payload)
-    {
-        await SendPacketAsync(PacketTypes.CHAT_MESSAGE, payload);
+        if (_broadcastCallback != null)
+        {
+            _broadcastCallback(payload, _connectionId);
+        }
     }
 
     private async Task HandlePingAsync(PingPayload? payload)
@@ -222,6 +243,33 @@ public class ClientConnection : IDisposable
         Log.Information("[{ConnectionId}] Received PONG rtt={Rtt}ms", _connectionId, rtt);
     }
 
+    private void HandleModeration(ModerationPayload? payload)
+    {
+        if (payload == null) return;
+
+        Log.Information("[{ConnectionId}] MODERATION action={Action}, scope={Scope}, reason={Reason}",
+            _connectionId, payload.Action, payload.Scope, payload.Reason);
+
+        switch (payload.Action)
+        {
+            case ModerationAction.WARN:
+                Log.Warning("[{ConnectionId}] Client warned: {Reason}", _connectionId, payload.Reason);
+                break;
+            case ModerationAction.MUTE:
+                _muted = true;
+                Log.Information("[{ConnectionId}] Client muted", _connectionId);
+                break;
+            case ModerationAction.KICK:
+                SendSystemDisconnect(SystemDisconnectReason.SHUTDOWN, payload.Reason ?? "Kicked");
+                Close();
+                break;
+            case ModerationAction.BAN:
+                SendSystemDisconnect(SystemDisconnectReason.SHUTDOWN, payload.Reason ?? "Banned");
+                Close();
+                break;
+        }
+    }
+
     private async Task SendPacketAsync(int packetType, PacketPayload payload)
     {
         var packet = new MineChatPacket(packetType, payload);
@@ -229,6 +277,17 @@ public class ClientConnection : IDisposable
         var compressed = _compressionHandler.Compress(serialized);
 
         await _frameHandler.WriteFrameAsync(_sslStream, compressed, serialized.Length, _cancellationToken);
+    }
+
+    public void SendPacket(int packetType, PacketPayload payload)
+    {
+        _ = SendPacketAsync(packetType, payload);
+    }
+
+    public void SendSystemDisconnect(int reasonCode, string message)
+    {
+        var payload = new SystemDisconnectPayload(reasonCode, message);
+        _ = SendPacketAsync(PacketTypes.SYSTEM_DISCONNECT, payload);
     }
 
     public void Close()

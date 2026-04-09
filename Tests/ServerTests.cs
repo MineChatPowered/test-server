@@ -165,7 +165,7 @@ public class PacketSerializationTests
     [Test]
     public void CapabilitiesPayload_Serialize_ThenDeserialize_Matches()
     {
-        var payload = new CapabilitiesPayload(true);
+        var payload = new CapabilitiesPayload(new[] { "components", "commonmark" }, "commonmark");
         var packet = new MineChatPacket(PacketTypes.CAPABILITIES, payload);
 
         var serialized = packet.Serialize();
@@ -175,7 +175,9 @@ public class PacketSerializationTests
         deserialized!.PacketType.Should().Be(PacketTypes.CAPABILITIES);
         var caps = deserialized.Payload as CapabilitiesPayload;
         caps.Should().NotBeNull();
-        caps!.SupportsComponents.Should().BeTrue();
+        caps!.SupportedFormats.Should().Contain("components");
+        caps.SupportedFormats.Should().Contain("commonmark");
+        caps.PreferredFormat.Should().Be("commonmark");
     }
 
     [Test]

@@ -6,6 +6,7 @@ public class FrameHandler
 {
     private const int HeaderSize = 8;
     private const int MaxDecompressedSize = 1024 * 1024;
+    private const int MaxCompressedSize = 1024 * 1024;
 
     public async Task<(int decompressedSize, int compressedSize, byte[] compressedData)?> ReadFrameAsync(Stream stream, CancellationToken cancellationToken = default)
     {
@@ -34,6 +35,9 @@ public class FrameHandler
 
         if (decompressedSize > MaxDecompressedSize)
             throw new InvalidDataException($"Decompressed size {decompressedSize} exceeds maximum {MaxDecompressedSize}");
+
+        if (compressedSize > MaxCompressedSize)
+            throw new InvalidDataException($"Compressed size {compressedSize} exceeds maximum {MaxCompressedSize}");
 
         // Read exactly compressedSize bytes
         var compressedData = new byte[compressedSize];
