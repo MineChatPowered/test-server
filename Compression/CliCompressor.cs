@@ -5,8 +5,30 @@ namespace Minechat.Server.Compression;
 
 public class CliCompressor : ICompressionHandler
 {
+    private static readonly bool ZstdAvailable = CheckZstd();
+
+    private static bool CheckZstd()
+    {
+        try
+        {
+            var exists = new CliCompressor().ZstdExists(3000);
+            if (!exists)
+            {
+                Log.Error("zstd binary not found. Please install zstd to enable compression.");
+            }
+            return exists;
+        }
+        catch
+        {
+            Log.Error("zstd binary check failed. Please install zstd to enable compression.");
+            return false;
+        }
+    }
+
     public byte[] Compress(byte[] data)
     {
+        if (!ZstdAvailable)
+            throw new InvalidOperationException("zstd is not available. Please install zstd.");
         Log.Debug("Compressing {Size} bytes", data.Length);
 
         var tempIn = Path.GetTempFileName();
@@ -28,6 +50,9 @@ public class CliCompressor : ICompressionHandler
 
     public byte[] Decompress(byte[] compressedData, int decompressedSize)
     {
+        if (!ZstdAvailable)
+            throw new InvalidOperationException("zstd is not available. Please install zstd.");
+
         Log.Debug("Decompressing {Size} bytes to expected {Expected} bytes",
             compressedData.Length, decompressedSize);
 
