@@ -9,7 +9,7 @@ namespace Minechat.Server.Tests;
 
 public class CompressionHandlerTests
 {
-    private readonly ICompressionHandler _handler = new CliCompressor();
+    private readonly ICompressionHandler _handler = new ZstdNetCompressor();
 
     [Test]
     public void Compress_ThenDecompress_ReturnsOriginalData()

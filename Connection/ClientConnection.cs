@@ -58,7 +58,7 @@ public class ClientConnection : IDisposable
         _sslStream.ReadTimeout = connectionTimeoutSeconds * 1000;
 
         _frameHandler = new FrameHandler();
-        _compressionHandler = new CliCompressor();
+        _compressionHandler = new ZstdNetCompressor();
 
         _pingTimer = new Timer(SendPing, null, TimeSpan.FromSeconds(pingIntervalSeconds), TimeSpan.FromSeconds(pingIntervalSeconds));
 
