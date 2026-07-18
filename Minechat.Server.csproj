@@ -15,15 +15,10 @@
     <PackageReference Include="Serilog" Version="4.3.1" />
     <PackageReference Include="Serilog.Sinks.Console" Version="6.1.1" />
     <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
-    <PackageReference Include="System.Formats.Cbor" Version="9.0.0" />
-    <PackageReference Include="ZstdNet" Version="1.5.7" />
   </ItemGroup>
 
   <ItemGroup>
-    <Compile Remove="Tests\**" />
-    <EmbeddedResource Remove="Tests\**" />
-    <None Remove="Tests\**" />
-    <Page Remove="Tests\**" />
+    <ProjectReference Include="..\protocol-dotnet\MineChat.Protocol.csproj" />
   </ItemGroup>
 
 </Project>

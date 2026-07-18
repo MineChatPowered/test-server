@@ -1,10 +1,8 @@
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Cryptography.X509Certificates;
-using Minechat.Server.Compression;
-using Minechat.Server.Framing;
+using MineChat.Protocol;
 using Minechat.Server.Logging;
-using Minechat.Server.Protocols;
 using Serilog;
 
 namespace Minechat.Server.Connection;
@@ -12,12 +10,10 @@ namespace Minechat.Server.Connection;
 public class ClientConnection : IDisposable
 {
     private readonly TcpClient _client;
-    private readonly SslStream _sslStream;
+    private readonly MineChatConnection _conn;
     private readonly string _connectionId;
     private readonly CancellationToken _cancellationToken;
     private readonly TimeSpan _keepAliveTimeout;
-    private readonly FrameHandler _frameHandler;
-    private readonly ICompressionHandler _compressionHandler;
     private readonly IChatLogger _chatLogger;
     private readonly Timer _pingTimer;
 
@@ -29,12 +25,12 @@ public class ClientConnection : IDisposable
     private string? _minecraftUuid;
     private bool _authenticated;
     private long _lastPacketTime;
-    private string[]? _clientSupportedFormats;
+    private IReadOnlyList<string>? _clientSupportedFormats;
     private string? _clientPreferredFormat;
     private bool _muted;
     private readonly Action<ChatMessagePayload, string?>? _broadcastCallback;
 
-    public string[]? SupportedFormats => _clientSupportedFormats;
+    public IReadOnlyList<string>? SupportedFormats => _clientSupportedFormats;
     public string? PreferredFormat => _clientPreferredFormat;
 
     public ClientConnection(TcpClient client, X509Certificate2 serverCert, string connectionId,
@@ -49,22 +45,16 @@ public class ClientConnection : IDisposable
         _chatLogger = chatLogger;
         _broadcastCallback = broadcastCallback;
 
-        _sslStream = new SslStream(
+        var sslStream = new SslStream(
             _client.GetStream(),
             false,
             (_, _, _, _) => true
         );
-
-        _sslStream.ReadTimeout = connectionTimeoutSeconds * 1000;
-
-        _frameHandler = new FrameHandler();
-        _compressionHandler = new ZstdNetCompressor();
-
-        _pingTimer = new Timer(SendPing, null, TimeSpan.FromSeconds(pingIntervalSeconds), TimeSpan.FromSeconds(pingIntervalSeconds));
+        sslStream.ReadTimeout = connectionTimeoutSeconds * 1000;
 
         try
         {
-            _sslStream.AuthenticateAsServer(serverCert);
+            sslStream.AuthenticateAsServer(serverCert);
             Log.Debug("[{ConnectionId}] TLS handshake successful", _connectionId);
         }
         catch (Exception ex)
@@ -72,6 +62,10 @@ public class ClientConnection : IDisposable
             Log.Error(ex, "[{ConnectionId}] TLS handshake failed", _connectionId);
             throw;
         }
+
+        _conn = new MineChatConnection(sslStream);
+
+        _pingTimer = new Timer(SendPing, null, TimeSpan.FromSeconds(pingIntervalSeconds), TimeSpan.FromSeconds(pingIntervalSeconds));
     }
 
     public async Task RunAsync()
@@ -88,23 +82,23 @@ public class ClientConnection : IDisposable
                     break;
                 }
 
-                var frame = await _frameHandler.ReadFrameAsync(_sslStream, _cancellationToken);
-                if (frame == null)
-                    break;
-
-                _lastPacketTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-
-                var (decompressedSize, _, compressedData) = frame.Value;
-
-                var decompressed = _compressionHandler.Decompress(compressedData, decompressedSize);
-                var packet = MineChatPacket.Deserialize(decompressed);
-
-                if (packet == null)
+                MineChatPacket? packet;
+                try
                 {
-                    Log.Error("[{ConnectionId}] Failed to deserialize packet. Data hex: {Hex}",
-                        _connectionId, Convert.ToHexString(decompressed.Take(64).ToArray()));
+                    packet = await _conn.ReadPacketAsync(_cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    Log.Error(ex, "[{ConnectionId}] Failed to read/decompress packet", _connectionId);
                     break;
                 }
+                if (packet == null) break;
+
+                _lastPacketTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
                 Log.Debug("[{ConnectionId}] Successfully deserialized packet type {PacketType}",
                     _connectionId, packet.PacketType);
@@ -135,7 +129,7 @@ public class ClientConnection : IDisposable
         {
             var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             var payload = new PingPayload(timestamp);
-            _ = SendPacketAsync(PacketTypes.PING, payload);
+            _ = SendPacketAsync(new MineChatPacket(PacketTypes.PING, payload));
             Log.Debug("[{ConnectionId}] Sent PING with timestamp {Timestamp}", _connectionId, timestamp);
         }
         catch (Exception ex)
@@ -181,8 +175,7 @@ public class ClientConnection : IDisposable
         Log.Information("[{ConnectionId}] LINK_RECEIVED code={LinkingCode}, assigned_minecraft_uuid={MinecraftUuid}",
             _connectionId, linkingCode, _minecraftUuid);
 
-        var responsePayload = new LinkOkPayload(_minecraftUuid);
-        await SendPacketAsync(PacketTypes.LINK_OK, responsePayload);
+        await SendPacketAsync(new MineChatPacket(PacketTypes.LINK_OK, new LinkOkPayload(_minecraftUuid)));
 
         Log.Information("[{ConnectionId}] LINK_OK_SENT", _connectionId);
     }
@@ -197,7 +190,7 @@ public class ClientConnection : IDisposable
         Log.Information("[{ConnectionId}] CAPABILITIES_RECEIVED supported_formats=[{SupportedFormats}], preferred_format={PreferredFormat}",
             _connectionId, string.Join(",", payload.SupportedFormats), payload.PreferredFormat);
 
-        await SendPacketAsync(PacketTypes.AUTH_OK, new AuthOkPayload());
+        await SendPacketAsync(new MineChatPacket(PacketTypes.AUTH_OK, new AuthOkPayload()));
         _authenticated = true;
 
         Log.Information("[{ConnectionId}] AUTH_OK_SENT", _connectionId);
@@ -230,7 +223,7 @@ public class ClientConnection : IDisposable
 
         Log.Debug("[{ConnectionId}] Received PING with timestamp {Timestamp}", _connectionId, payload.TimestampMs);
 
-        await SendPacketAsync(PacketTypes.PONG, new PongPayload(payload.TimestampMs));
+        await SendPacketAsync(new MineChatPacket(PacketTypes.PONG, new PongPayload(payload.TimestampMs)));
 
         Log.Information("[{ConnectionId}] Responded to PING with timestamp {Timestamp}", _connectionId, payload.TimestampMs);
     }
@@ -270,24 +263,19 @@ public class ClientConnection : IDisposable
         }
     }
 
-    private async Task SendPacketAsync(int packetType, PacketPayload payload)
+    private async Task SendPacketAsync(MineChatPacket packet)
     {
-        var packet = new MineChatPacket(packetType, payload);
-        var serialized = packet.Serialize();
-        var compressed = _compressionHandler.Compress(serialized);
-
-        await _frameHandler.WriteFrameAsync(_sslStream, compressed, serialized.Length, _cancellationToken);
+        await _conn.SendPacketAsync(packet, _cancellationToken);
     }
 
     public void SendPacket(int packetType, PacketPayload payload)
     {
-        _ = SendPacketAsync(packetType, payload);
+        _ = SendPacketAsync(new MineChatPacket(packetType, payload));
     }
 
     public void SendSystemDisconnect(int reasonCode, string message)
     {
-        var payload = new SystemDisconnectPayload(reasonCode, message);
-        _ = SendPacketAsync(PacketTypes.SYSTEM_DISCONNECT, payload);
+        _ = SendPacketAsync(new MineChatPacket(PacketTypes.SYSTEM_DISCONNECT, new SystemDisconnectPayload(reasonCode, message)));
     }
 
     public void Close()
@@ -307,11 +295,11 @@ public class ClientConnection : IDisposable
 
         try
         {
-            _sslStream.Close();
+            _conn.Dispose();
         }
         catch (Exception ex)
         {
-            Log.Debug(ex, "[{ConnectionId}] Error closing SSL stream", _connectionId);
+            Log.Debug(ex, "[{ConnectionId}] Error disposing MineChatConnection", _connectionId);
         }
 
         try

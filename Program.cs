@@ -5,7 +5,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using Minechat.Server.Connection;
 using Minechat.Server.Logging;
-using Minechat.Server.Protocols;
+using MineChat.Protocol;
 using Serilog;
 using Serilog.Events;
 
@@ -39,9 +39,9 @@ class Program
         }
     }
 
-    private static string SelectFormatForClient(string originalFormat, string[]? supportedFormats, string? preferredFormat)
+    private static string SelectFormatForClient(string originalFormat, IReadOnlyList<string>? supportedFormats, string? preferredFormat)
     {
-        if (supportedFormats == null || supportedFormats.Length == 0)
+        if (supportedFormats == null || supportedFormats.Count == 0)
             return "components";
 
         var formats = supportedFormats.ToHashSet();
@@ -75,7 +75,7 @@ class Program
                 outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}")
             .CreateLogger();
 
-        Log.Information("MineChat Echo Test Server v1.0.0");
+        Console.WriteLine("<-- MineChat Test Server -->");
 
         var chatLogger = new ChatLogger();
         _cts = new CancellationTokenSource();
