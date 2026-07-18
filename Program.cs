@@ -169,7 +169,7 @@ class Program
     {
         if (File.Exists(CertFile))
         {
-            return new X509Certificate2(CertFile, CertPassword);
+            return X509CertificateLoader.LoadPkcs12FromFile(CertFile, CertPassword, X509KeyStorageFlags.DefaultKeySet, null);
         }
 
         Log.Information("Generating self-signed certificate...");
@@ -207,6 +207,6 @@ class Program
 
         Log.Information("Certificate saved to {CertFile}", CertFile);
 
-        return new X509Certificate2(CertFile, CertPassword);
+        return X509CertificateLoader.LoadPkcs12FromFile(CertFile, CertPassword, X509KeyStorageFlags.DefaultKeySet, null);
     }
 }
