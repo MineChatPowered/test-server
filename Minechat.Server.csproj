@@ -18,7 +18,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\protocol-dotnet\MineChat.Protocol.csproj" />
+    <PackageReference Include="MineChat.Protocol" Version="0.1.1" />
   </ItemGroup>
 
 </Project>

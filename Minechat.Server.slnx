@@ -1,4 +1,3 @@
 <Solution>
-  <Project Path="../protocol-dotnet/MineChat.Protocol.csproj" />
   <Project Path="Minechat.Server.csproj" />
 </Solution>
