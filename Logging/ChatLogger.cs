@@ -1,6 +1,6 @@
 using Serilog;
 
-namespace Minechat.Server.Logging;
+namespace MineChat.Server.Logging;
 
 public class ChatLogger : IChatLogger
 {

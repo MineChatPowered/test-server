@@ -3,13 +3,14 @@ using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
-using Minechat.Server.Connection;
-using Minechat.Server.Logging;
+using CommandLine;
 using MineChat.Protocol;
+using MineChat.Server.Connection;
+using MineChat.Server.Logging;
 using Serilog;
 using Serilog.Events;
 
-namespace Minechat.Server;
+namespace MineChat.Server;
 
 class Program
 {
@@ -19,63 +20,27 @@ class Program
     private static readonly ConcurrentBag<ClientConnection> _connections = [];
     private static CancellationTokenSource? _cts;
 
-    private static void BroadcastChatMessage(ChatMessagePayload payload, string? excludeConnectionId)
-    {
-        foreach (var conn in _connections)
-        {
-            if (conn.IsAuthenticated && (excludeConnectionId == null || conn.ConnectionId != excludeConnectionId))
-            {
-                try
-                {
-                    var formatToUse = SelectFormatForClient(payload.Format, conn.SupportedFormats, conn.PreferredFormat);
-                    var transformedPayload = new ChatMessagePayload(formatToUse, payload.Content);
-                    conn.SendPacket(PacketTypes.CHAT_MESSAGE, transformedPayload);
-                }
-                catch (Exception ex)
-                {
-                    Log.Warning(ex, "Failed to send to connection {ConnectionId}", conn.ConnectionId);
-                }
-            }
-        }
-    }
-
-    private static string SelectFormatForClient(string originalFormat, IReadOnlyList<string>? supportedFormats, string? preferredFormat)
-    {
-        if (supportedFormats == null || supportedFormats.Count == 0)
-            return "components";
-
-        var formats = supportedFormats.ToHashSet();
-
-        if (preferredFormat != null && formats.Contains(preferredFormat))
-            return preferredFormat;
-
-        if (formats.Contains(originalFormat))
-            return originalFormat;
-
-        if (formats.Contains("commonmark"))
-            return "commonmark";
-
-        if (formats.Contains("components"))
-            return "components";
-
-        return "components";
-    }
-
     static async Task Main(string[] args)
     {
-        var port = args.Length > 0 && int.TryParse(args[0], out var p) ? p : ServerConfig.DEFAULT_PORT;
+        var result = Parser.Default.ParseArguments<Args>(args);
+        await result.WithParsedAsync(RunOptions);
+        result.WithNotParsed(HandleParseError);
+    }
+
+    static async Task RunOptions(Args args)
+    {
 
         Log.Logger = new LoggerConfiguration()
             .MinimumLevel.Debug()
             .MinimumLevel.Override("Microsoft", LogEventLevel.Information)
             .WriteTo.Console(outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}")
             .WriteTo.File(
-                ServerConfig.LOG_FILE_PATH,
+                DefaultServerConfig.LogFilePath,
                 rollingInterval: RollingInterval.Day,
                 outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}")
             .CreateLogger();
 
-        Console.WriteLine("<-- MineChat Test Server -->");
+        Console.WriteLine("<-- MineChat Testing Server -->");
 
         var chatLogger = new ChatLogger();
         _cts = new CancellationTokenSource();
@@ -98,10 +63,10 @@ class Program
 
         var serverCert = GetOrCreateCertificate();
 
-        var listener = new TcpListener(IPAddress.Any, port);
+        var listener = new TcpListener(IPAddress.Any, args.Port);
         listener.Start();
 
-        Log.Information("Listening on TCP {Port} with TLS...", port);
+        Log.Information("Listening on TCP {Port} with TLS...", args.Port);
         Log.Information("Press Ctrl+C to stop");
 
         try
@@ -112,10 +77,10 @@ class Program
                 {
                     var client = await listener.AcceptTcpClientAsync(_cts.Token);
 
-                    if (_connections.Count >= ServerConfig.MAX_CLIENTS)
+                    if (_connections.Count >= DefaultServerConfig.MaxClients)
                     {
                         Log.Warning("Max clients {MaxClients} reached, rejecting new connection from {RemoteEndPoint}",
-                            ServerConfig.MAX_CLIENTS, client.Client.RemoteEndPoint);
+                            DefaultServerConfig.MaxClients, client.Client.RemoteEndPoint);
                         client.Close();
                         continue;
                     }
@@ -124,9 +89,9 @@ class Program
 
                     var connectionId = Guid.NewGuid().ToString("N")[..8];
                     var connection = new ClientConnection(client, serverCert, connectionId, _cts.Token,
-                        TimeSpan.FromSeconds(ServerConfig.KEEP_ALIVE_TIMEOUT_SECONDS),
-                        ServerConfig.PING_INTERVAL_SECONDS,
-                        ServerConfig.CONNECTION_TIMEOUT_SECONDS,
+                        TimeSpan.FromSeconds(DefaultServerConfig.KeepAliveTimeoutSeconds),
+                        DefaultServerConfig.PingIntervalSeconds,
+                        DefaultServerConfig.ConnectionTimeoutSeconds,
                         chatLogger,
                         BroadcastChatMessage);
 
@@ -156,13 +121,25 @@ class Program
 
             foreach (var conn in _connections)
             {
-                conn.SendSystemDisconnect(SystemDisconnectReason.SHUTDOWN, "Server shutting down");
-                conn.Close();
+                try
+                {
+                    conn.SendSystemDisconnect(SystemDisconnectReason.SHUTDOWN, "Server shutting down");
+                    conn.Close();
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning(ex, "Failed to close connection {ConnectionId} during shutdown", conn.ConnectionId);
+                }
             }
 
             listener.Stop();
             Log.CloseAndFlush();
         }
+    }
+
+    static void HandleParseError(IEnumerable<Error> errs)
+    {
+
     }
 
     static X509Certificate2 GetOrCreateCertificate()
@@ -209,4 +186,47 @@ class Program
 
         return X509CertificateLoader.LoadPkcs12FromFile(CertFile, CertPassword, X509KeyStorageFlags.DefaultKeySet, null);
     }
+
+    private static void BroadcastChatMessage(ChatMessagePayload payload, string? excludeConnectionId)
+    {
+        foreach (var conn in _connections)
+        {
+            if (conn.IsAuthenticated && (excludeConnectionId == null || conn.ConnectionId != excludeConnectionId))
+            {
+                try
+                {
+                    var formatToUse = SelectFormatForClient(payload.Format, conn.SupportedFormats, conn.PreferredFormat);
+                    var transformedPayload = new ChatMessagePayload(formatToUse, payload.Content);
+                    conn.SendPacket(PacketTypes.CHAT_MESSAGE, transformedPayload);
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning(ex, "Failed to send to connection {ConnectionId}", conn.ConnectionId);
+                }
+            }
+        }
+    }
+
+    private static string SelectFormatForClient(string originalFormat, IReadOnlyList<string>? supportedFormats, string? preferredFormat)
+    {
+        if (supportedFormats == null || supportedFormats.Count == 0)
+            return "components";
+
+        var formats = supportedFormats.ToHashSet();
+
+        if (preferredFormat != null && formats.Contains(preferredFormat))
+            return preferredFormat;
+
+        if (formats.Contains(originalFormat))
+            return originalFormat;
+
+        if (formats.Contains("commonmark"))
+            return "commonmark";
+
+        if (formats.Contains("components"))
+            return "components";
+
+        return "components";
+    }
+
 }

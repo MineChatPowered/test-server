@@ -1,4 +1,4 @@
-namespace Minechat.Server.Logging;
+namespace MineChat.Server.Logging;
 
 public interface IChatLogger
 {

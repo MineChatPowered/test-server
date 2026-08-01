@@ -2,10 +2,10 @@ using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Cryptography.X509Certificates;
 using MineChat.Protocol;
-using Minechat.Server.Logging;
+using MineChat.Server.Logging;
 using Serilog;
 
-namespace Minechat.Server.Connection;
+namespace MineChat.Server.Connection;
 
 public class ClientConnection : IDisposable
 {
